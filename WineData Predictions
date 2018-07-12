@@ -1,0 +1,190 @@
+#Clear Environment console
+rm(list =ls(all=T))
+
+#Setting working directory
+getwd()
+setwd("D:\\R")
+
+#Reading the data 
+Data<-read.csv(file = "wine_dataset.csv", header=TRUE)
+
+#Loading required library
+library(caret)
+library(corrplot)
+library(klaR)
+library(randomForest)
+library(gbm)
+library(DMwR)
+library(ggraph)
+library(igraph)
+library(rpart)
+library(reprtree)
+
+
+#Create data partition for train and test 70:30 ratio
+#Devide the data into two groups 0 :{3,4,5,6} , 1:{7,8,9} based on the "quality" attribute to make given data as classification problem,
+##By doing so we can predict the quality of the wine with given attributes so that it can be used to improve the production with high quality of wine with the significant variables.
+
+Data$quality<-ifelse(Data$quality >=(7), 1,0) #For traindata
+Data$quality<-as.factor(as.character(Data$quality))
+
+set.seed(7)
+traindataIndex<-createDataPartition(Data$quality, p=0.70, list = FALSE)
+traindata<-Data[traindataIndex,] #70% of the data for training
+testdata<-Data[-traindataIndex,] #30% of the data for testing the model
+
+########Analyzing the data###############
+
+##Descriptive statistics
+dim(traindata) #We have 4549 rows and 13 attributes
+
+#Peek of the data
+head(traindata, n=15) #We can see that many of the attributes hav numerical data we can think about data normalization to bring all varibales to same scale.
+
+#Attribute data type
+lapply(traindata, class)
+
+#Summary & Structure of the data
+summary(traindata)
+str(traindata)
+
+#Look at the class (style) breakdown to understand the data imbalance 
+cbind(freq=table(traindata$quality), percentage=prop.table(table(traindata$quality))*100)
+###We can see that red and white vslues are imbalanced, We need to think about the rebalencing the data or use any appropriate etric to measure performenace of the model
+
+#Look at the correlation between the attributes
+cor(traindata[,1:11])
+###Finding the high correlation attributes with cutoff 70%
+set.seed(7)
+correlations<-cor(traindata[,1:11])
+highlycorrelated<-findCorrelation(correlations, cutoff = 0.70)
+for (value in highlycorrelated) {
+  print(names(traindata)[value])
+}
+
+#Plotting correlation table
+corrplot(correlations, method="circle") 
+#From the plot we can see that "total_sulfur_dioxide" & "density" has correlation and inverse-correlation with other attributes
+##We can remove these attributes if required from modeling for better accuracy
+
+##########Data Visualization##############
+
+###Univariate data visualization
+#Histogram for each attribute
+par(mfrow=c(3,4))
+for (i in 1:11){
+  hist(traindata[,i], main=names(traindata[i]))
+} #We can see that attributes have "exponential" and "normal distribution" with right skew, we hav to consider data transformation
+
+#Boxplot 
+par(mfrow=c(3,4))
+for (i in 1:11){
+  boxplot(traindata[,i], main=names(traindata[i]))
+} #Seems attributes have outlier values.
+
+#Multivariate visualization with scatter plot
+pairs(traindata, names(traindata[,1:11]))
+
+#########Data Preprocessing for Algorithm Evaluation#############
+
+##Using Box-cox tranformation to reduce the skew
+tranformation<-preProcess(traindata[,1:11], method = ("BoxCox"))
+testtranformation<-preProcess(testdata[,1:11], method = ("BoxCox"))
+
+#Transform the data using tranformation 
+traintransformed<-predict(tranformation,traindata[,1:13])
+testtransformed<-predict(testtranformation, testdata[,1:13])
+
+par(mfrow=c(3,4))
+for (i in 1:11){
+  hist(traintransformed[,i], main=names(traintransformed[i]), col = 'red')
+} #We can see that most of the attributes are following normal distribution now
+
+
+#Making 'style' attribute to NULL, assuming it has to use for classifying the problem
+##And also "total_sulfur_dioxide" & "density" as they have high correlation in the data it may impact on accuracy of the model
+traintransformed$style<-NULL
+testtransformed$style<-NULL
+
+###########Model Design###########
+#Assuming the business problem can be achived by classifying the data based on "quality" so considering the classification family algorithms (Linear and Non-Linear)
+#Using k-fold cross validation for better performance
+#Using "Acuuracy & Kappa" as performance metric for simplicity.
+
+#10 fold cross validation with 3 repeats
+traincontrol<-trainControl(method="repeatedcv", number=10, repeats=3)
+metric<-"Accuracy"
+
+#Logistic Regression
+set.seed(7)
+fit.glm<-train(quality~., data = traintransformed, method="glm",metric=metric,trControl=traincontrol)
+
+#Generalized linear model (glmnet)
+set.seed(7)
+fit.glmnet<-train(quality~., data = traintransformed, method="glmnet",metric=metric,trControl=traincontrol)
+
+#K - Nearest neighbour
+set.seed(7)
+fit.knn<-train(quality~., data = traintransformed, method="knn",metric=metric,trControl=traincontrol)
+
+#Classification & regression tree(CART)
+set.seed(7)
+fit.cart<-train(quality~., data = traintransformed, method="rpart",metric=metric,trControl=traincontrol)
+
+#Naive Bayes
+set.seed(7)
+fit.nb<-train(quality~., data = traintransformed, method="nb",metric=metric,trControl=traincontrol)
+
+#Support vector machine (SVM)
+set.seed(7)
+fit.svm<-train(quality~., data = traintransformed, method="svmRadial",metric=metric,trControl=traincontrol)
+
+#Compare algorithms
+results<-resamples(list(LG=fit.glm, GLMNET=fit.glmnet, KNN=fit.knn, CART=fit.cart, NB=fit.nb, SVM=fit.svm))
+summary(results)
+
+#############Using Emsembele methods #################
+#Bagging & Boosting methods: Bagged CART, Random Forest & Stochastic GBM
+
+traincontrol<-trainControl(method="repeatedcv", number=10, repeats=3)
+metric<-"Accuracy"
+
+#Bagged Tree
+set.seed(7)
+fit.treebag<-train(quality~., data = traintransformed, method="treebag",metric=metric,trControl=traincontrol)
+
+#Random Forest
+set.seed(7)
+fit.rf<-train(quality~., data = traintransformed, method="rf",metric=metric,trControl=traincontrol)
+
+#Stochatic GBM
+set.seed(7)
+fit.gbm<-train(quality~., data = traintransformed, method="gbm",metric=metric,trControl=traincontrol, verbose=FALSE)
+
+emsembleresults<-resamples(list(BAG=fit.treebag, RF=fit.rf, SGBM=fit.gbm))
+summary(emsembleresults)
+
+
+#Prediction on test data
+testpred<-predict(fit.rf, testtransformed)
+confusionMatrix(testpred,testtransformed$quality)
+
+############Building the classification with "RandonForest" library to extract tress and Variable importance########
+set.seed(7)
+model = randomForest(quality ~ ., data=traintransformed, keep.forest=TRUE, ntree=50) 
+
+print(model)
+model$importance
+round(importance(model), 2)
+
+# plot (directly prints the important attributes) 
+par(mfrow=c(1,1))
+varImpPlot(model)
+
+# Predicton Test Data
+pred_Test = predict(model, testtransformed,type="response", norm.votes=TRUE)
+confusionMatrix(pred_Test, testtransformed$quality)
+
+#tree Extraction
+gt<-getTree(model,2,labelVar=FALSE)
+
